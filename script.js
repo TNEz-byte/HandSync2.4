@@ -1,6 +1,15 @@
+
+
+// (ลบบรรทัด import ออกให้หมด)
+
 const videoElement = document.getElementById('webcam');
 const canvasElement = document.getElementById('output_canvas');
 const canvasCtx = canvasElement.getContext('2d');
+
+// เรียกใช้งานฟังก์ชันที่โหลดมาจาก capture.js
+initCapture(videoElement, canvasElement);
+
+// ... (โค้ด MediaPipe และการเล่นเพลงเดิมทั้งหมด)
 const bandDisplay = document.getElementById('band-display');
 const songDisplay = document.getElementById('song-display');
 
@@ -8,10 +17,9 @@ let currentBand = "";
 let currentSongIndex = 0;
 
 // ==========================================
-// ตัวนับเฟรม (Hold Counter) สำหรับแต่ละท่าทาง
-// 50 เฟรม ≈ 3-4 วินาที (ขึ้นอยู่กับความเร็วกล้อง)
+// ระบบนับเฟรม (Hold Counter) 50 เฟรม ≈ 3-4 วินาที
 // ==========================================
-const HOLD_TARGET = 50; 
+const HOLD_TARGET = 40; 
 
 let counters = {
   CARABAO: 0,
@@ -20,13 +28,14 @@ let counters = {
   Z9: 0,
   SILLYFOOLS: 0,
   FIST: 0,
-  CROSS_RESET: 0
+  PAUSE_ONE_FINGER: 0,
+  RESUME_TWO_FINGERS: 0
 };
 
 let isCooldown = false;
 const currentAudio = new Audio();
 
-// รายชื่อวงและไฟล์เพลงทั้งหมด
+// คลังเพลงของแต่ละวง
 const bandPlaylist = {
   CARABAO: {
     bandName: "คาราบาว (Carabao)",
@@ -40,7 +49,7 @@ const bandPlaylist = {
     bandName: "Three Man Down",
     songs: [
       { songName: "ฝนตกไหม", audioUrl: "songs/tmd3-full1.mp3" },
-      { songName: "ถ้าเธอรักใครจริง", audioUrl: "songs/tmd-full2.mp3" },
+      { songName: "ถ้าเธอรักใครจริง", audioUrl: "songs/tmd3-full2.mp3" },
       { songName: "ข้างกัน", audioUrl: "songs/tmd3-full3.mp3" }
     ]
   },
@@ -70,12 +79,15 @@ const bandPlaylist = {
   }
 };
 
+// ฟังก์ชันคำนวณระยะห่างระหว่างจุด 2 จุด
 function getDistance(p1, p2) {
   return Math.hypot(p1.x - p2.x, p1.y - p2.y);
 }
 
 // 1. ตรวจจับสัญลักษณ์มือเดี่ยว
 function detectSingleHandGesture(landmarks) {
+  // ป้องกัน Error กรณี MediaPipe ส่งจุด Landmarks มาไม่ครบ
+  if (!landmarks || landmarks.length < 21) return "UNKNOWN";
   const thumbTip = landmarks[4];
   const indexTip = landmarks[8];
   const middleTip = landmarks[12];
@@ -97,32 +109,44 @@ function detectSingleHandGesture(landmarks) {
   const isRingDown = ringTip.y > ringPip.y;
   const isPinkyDown = pinkyTip.y > pinkyPip.y;
 
-  // 🤞 ไขว้นิ้ว -> รีเซ็ต
-  const isFingersCrossed = isIndexUp && isMiddleUp && (Math.abs(indexTip.x - middleTip.x) < 0.03);
-  if (isFingersCrossed && isRingDown && isPinkyDown) return "CROSS_RESET";
+  // ☝️ 1.1 ชู 1 นิ้ว (นิ้วชี้) -> หยุดเพลง (Pause)
+  if (isIndexUp && isMiddleDown && isRingDown && isPinkyDown) {
+    return "PAUSE_ONE_FINGER";
+  }
 
-  // ✊ กำมือ -> เปลี่ยนเพลง
-  if (isIndexDown && isMiddleDown && isRingDown && isPinkyDown) return "FIST";
+  // ✌️ 1.2 ชู 2 นิ้ว (ชี้ + กลาง) -> เล่นเพลงต่อ (Resume)
+  // ตรวจสอบหลักๆ คือ นิ้วชี้กับนิ้วกลางตั้งขึ้น ส่วนนิ้วนางกับนิ้วก้อยพับลง
+  if (isIndexUp && isMiddleUp && isRingDown && isPinkyDown) {
+    return "RESUME_TWO_FINGERS";
+  }
 
-  // 🤘 Silly Fools (Rock Sign)
+  // ✊ 1.3 กำมือ (Fist) -> ข้ามเพลง (ใช้มือข้างไหนก็ได้)
+  if (isIndexDown && isMiddleDown && isRingDown && isPinkyDown) {
+    return "FIST";
+  }
+
+  // 🤘 1.4 Silly Fools (Rock Sign: ชี้ + ก้อย)
   if (isIndexUp && isPinkyUp && isMiddleDown && isRingDown) return "SILLYFOOLS";
 
-  // 👌 Z9
+  // 👌 1.5 Z9 (โป้งแตะชี้เป็นวงกลมแน่นขึ้น < 0.045)
   const thumbIndexDist = getDistance(thumbTip, indexTip);
   if (thumbIndexDist < 0.045 && isMiddleUp && isRingUp && isPinkyUp) return "Z9";
 
-  // 🤟 Three Man Down
+  // 🤟 1.6 Three Man Down (ชู 3 นิ้ว: ชี้+กลาง+นาง)
   if (isIndexUp && isMiddleUp && isRingUp && isPinkyDown) return "THREEMANDOWN";
 
-  // 🤙 Carabao
+  // 🤙 1.7 Carabao (Shaka: โป้ง+ก้อย)
   const isThumbOut = Math.abs(thumbTip.x - indexPip.x) > 0.12;
   if (isThumbOut && isPinkyUp && isIndexDown && isMiddleDown) return "CARABAO";
 
   return "UNKNOWN";
 }
 
-// 2. ตรวจจับสัญลักษณ์ Slot Machine (🔺)
+// 2. ตรวจจับสัญลักษณ์ Slot Machine (รูปสามเหลี่ยม 🔺 2 มือ)
 function detectTriangleGesture(hand1, hand2) {
+  // ป้องกัน Array หลุด Scope
+  if (!hand1 || hand1.length < 21 || !hand2 || hand2.length < 21) return "UNKNOWN";
+
   const h1IndexTip = hand1[8];
   const h1ThumbTip = hand1[4];
   const h1IndexPip = hand1[6];
@@ -137,14 +161,14 @@ function detectTriangleGesture(hand1, hand2) {
   const isH1IndexUp = h1IndexTip.y < h1IndexPip.y;
   const isH2IndexUp = h2IndexTip.y < h2IndexPip.y;
 
-  if (indexDistance < 0.08 && thumbDistance < 0.08 && isH1IndexUp && isH2IndexUp) {
+  if (indexDistance < 0.07 && thumbDistance < 0.08 && isH1IndexUp && isH2IndexUp) {
     return "SLOTMACHINE";
   }
 
   return "UNKNOWN";
 }
 
-// 3. ประมวลผลเฟรม
+// 3. ประมวลผลแต่ละเฟรมจากกล้อง
 function onResults(results) {
   canvasCtx.save();
   canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
@@ -152,9 +176,14 @@ function onResults(results) {
   let detectedGesture = "UNKNOWN";
 
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-    for (const landmarks of results.multiHandLandmarks) {
-      drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#00FFCC', lineWidth: 3 });
-      drawLandmarks(canvasCtx, landmarks, { color: '#FF0055', lineWidth: 1, radius: 4 });
+    for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+      const landmarks = results.multiHandLandmarks[i];
+      
+      // 📌 เช็กความพร้อมของ HAND_CONNECTIONS ก่อนวาด
+      if (typeof HAND_CONNECTIONS !== 'undefined' && window.drawConnectors) {
+        drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, { color: '#eff3f2', lineWidth: 3 });
+        drawLandmarks(canvasCtx, landmarks, { color: '#1eff00', lineWidth: 1, radius: 4 });
+      }
     }
 
     if (results.multiHandLandmarks.length === 2) {
@@ -172,42 +201,60 @@ function onResults(results) {
   handleGestureWithDelay(detectedGesture);
   canvasCtx.restore();
 }
-
-// 4. จัดการระบบหน่วงเวลาค้างมือ 3-4 วินาที
+// 4. จัดการระบบนับเวลาค้างมือ 3-4 วินาที
 function handleGestureWithDelay(gesture) {
-  // เพิ่มค่านับให้ท่าที่กำลังทำอยู่ และ รีเซ็ตค่านับของท่าอื่นๆ ทั้งหมด
   for (const key in counters) {
     if (key === gesture) {
       counters[key]++;
     } else {
-      counters[key] = 0; // ถ้าเลิกทำท่า ให้รีเซ็ตค่านับกลับเป็น 0
+      counters[key] = 0;
     }
   }
 
-  // // แสดงผลสถานะค้างมือแบบ Real-time บนหน้าจอ
-  // if (gesture !== "UNKNOWN" && counters[gesture] > 0 && counters[gesture] < HOLD_TARGET) {
-  //   const progressPercent = Math.round((counters[gesture] / HOLD_TARGET) * 100);
-  //   songDisplay.innerText = `⏳ กำลังค้างท่าทาง... (${progressPercent}%)`;
-  // }
-
-  // เมื่อค้างท่าทางจนครบ 50 เฟรม (3-4 วินาที)
   if (counters[gesture] >= HOLD_TARGET) {
-    counters[gesture] = 0; // รีเซ็ตตัวนับเมื่อทำงานสำเร็จ
+    counters[gesture] = 0;
 
-    // --- 4.1 กรณีไขว้นิ้ว (CROSS_RESET 🤞) ---
-    if (gesture === "CROSS_RESET") {
+    // --- ☝️ 4.1 ชู 1 นิ้วเพื่อหยุดเพลงชั่วคราว (Pause) ---
+    if (gesture === "PAUSE_ONE_FINGER") {
       if (currentBand !== "") {
-        currentBand = "";
-        currentSongIndex = 0;
         currentAudio.pause();
-        currentAudio.currentTime = 0;
-        bandDisplay.innerText = "กำลังรอสัญลักษณ์มือ...";
-        songDisplay.innerText = "(หยุดเพลงและรีเซ็ตเรียบร้อย)";
+        const bandData = bandPlaylist[currentBand];
+        const songData = bandData.songs[currentSongIndex];
+        songDisplay.innerText = `หยุดเพลงชั่วคราว: ${songData.songName}`;
       }
       return;
     }
 
-    // --- 4.2 กรรณีกำมือข้ามเพลง (FIST ✊) ---
+// --- ✌️ 4.2 ชู 2 นิ้วเพื่อเล่นเพลงต่อ (Resume) ---
+    if (gesture === "RESUME_TWO_FINGERS") {
+      // ถ้ายังไม่มีการเลือกวง ให้ตั้งเป็นวงแรกชั่วคราว
+      if (!currentBand) {
+        currentBand = "CARABAO"; // หรือวงตั้งต้นที่คุณต้องการ
+        currentSongIndex = 0;
+      }
+
+      if (currentBand && bandPlaylist[currentBand]) {
+        const bandData = bandPlaylist[currentBand];
+        const songData = bandData.songs[currentSongIndex];
+
+        // ถ้ายังไม่มี src ให้ใส่เพลงปัจจุบันเข้าไปก่อน
+        if (!currentAudio.src || currentAudio.src === "") {
+          currentAudio.src = songData.audioUrl;
+        }
+
+        currentAudio.play().then(() => {
+          bandDisplay.innerText = bandData.bandName;
+          songDisplay.innerText = `กำลังเล่น (${currentSongIndex + 1}/${bandData.songs.length}): ${songData.songName}`;
+        }).catch(err => {
+          console.log("Audio Playback Error:", err);
+          // หากโดน Autoplay Policy ของเบราว์เซอร์บล็อก ให้แจ้งผู้ใช้
+          songDisplay.innerText = "คลิกที่หน้าจอ 1 ครั้งเพื่ออนุญาตให้เล่นเสียง";
+        });
+      }
+      return;
+    }
+
+    // --- ✊ 4.3 กำมือเปลี่ยนเพลง (ข้ามไปเพลงถัดไป - ใช้มือข้างไหนก็ได้) ---
     if (gesture === "FIST") {
       if (!isCooldown && currentBand && bandPlaylist[currentBand]) {
         isCooldown = true;
@@ -220,7 +267,7 @@ function handleGestureWithDelay(gesture) {
       return;
     }
 
-    // --- 4.3 กรณีสลับวงดนตรี ---
+    // --- 4.4 สลับวงดนตรี ---
     if (gesture !== "UNKNOWN" && gesture !== currentBand) {
       currentBand = gesture;
       currentSongIndex = 0;
@@ -261,8 +308,8 @@ const camera = new Camera(videoElement, {
   onFrame: async () => {
     await hands.send({ image: videoElement });
   },
-  width: 640,
-  height: 480
+  width: 1280,
+  height: 720
 });
 
 camera.start().catch(err => console.error("เปิดกล้องไม่ได้:", err));
