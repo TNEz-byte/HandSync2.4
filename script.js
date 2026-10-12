@@ -25,7 +25,7 @@ let counters = {
   FIST: 0,
   PAUSE_ONE_FINGER: 0,
   RESUME_TWO_FINGERS: 0,
-  RESET_PALM: 0 // ตัวนับเวลาสำหรับแบมือรีเซ็ต
+  RESET_PALM: 0 // ตัวนับเวลาสำหรับกำมือ 2 ข้างเพื่อรีเซ็ต
 };
 
 let isCooldown = false;
@@ -52,9 +52,9 @@ const bandPlaylist = {
   SLOTMACHINE: {
     bandName: "Slot Machine",
     songs: [
-      { songName: "ผ่าน", audioUrl: "songs/solt-edit1.mp3" },
-      { songName: "จันทร์เจ้า", audioUrl: "songs/solt-edit2.mp3" },
-      { songName: "เคลิ้ม", audioUrl: "songs/solt-edit3.mp3" }
+      { songName: "ผ่าน", audioUrl: "songs/slot-edit1.mp3" },
+      { songName: "จันทร์เจ้า", audioUrl: "songs/slot-edit2.mp3" },
+      { songName: "เคลิ้ม", audioUrl: "songs/slot-edit3.mp3" }
     ]
   },
   Z9: {
@@ -78,6 +78,25 @@ const bandPlaylist = {
 // ฟังก์ชันคำนวณระยะห่างระหว่างจุด 2 จุด
 function getDistance(p1, p2) {
   return Math.hypot(p1.x - p2.x, p1.y - p2.y);
+}
+
+// เช็กว่ามือนั้นๆ กำมืออยู่หรือไม่
+function isFist(landmarks) {
+  if (!landmarks || landmarks.length < 21) return false;
+  const indexTip = landmarks[8];
+  const middleTip = landmarks[12];
+  const ringTip = landmarks[16];
+  const pinkyTip = landmarks[20];
+
+  const indexPip = landmarks[6];
+  const middlePip = landmarks[10];
+  const ringPip = landmarks[14];
+  const pinkyPip = landmarks[18];
+
+  return indexTip.y > indexPip.y && 
+         middleTip.y > middlePip.y && 
+         ringTip.y > ringPip.y && 
+         pinkyTip.y > pinkyPip.y;
 }
 
 // 1. ตรวจจับสัญลักษณ์มือเดี่ยว
@@ -105,12 +124,6 @@ function detectSingleHandGesture(landmarks) {
   const isRingDown = ringTip.y > ringPip.y;
   const isPinkyDown = pinkyTip.y > pinkyPip.y;
 
-  // 🖐️ 1.0 แบมือ (ชี้, กลาง, นาง, ก้อย ตั้งขึ้นพร้อมกันทั้งหมด) -> รีเซ็ตระบบเป็นศูนย์
-  // วางไว้บนสุดเพื่อป้องกันไม่ให้โดนเงื่อนไขอื่นแย่งตรวจจับ
-  if (isIndexUp && isMiddleUp && isRingUp && isPinkyUp) {
-    return "RESET_PALM";
-  }
-
   // 🤟 1.1 Three Man Down (ชู 3 นิ้ว: ชี้ + กลาง + นาง / ก้อยพับลง)
   if (isIndexUp && isMiddleUp && isRingUp && isPinkyDown) {
     return "THREEMANDOWN";
@@ -126,7 +139,7 @@ function detectSingleHandGesture(landmarks) {
     return "RESUME_TWO_FINGERS";
   }
 
-  // ✊ 1.4 กำมือแน่นธรรมดา (Fist) -> ข้ามเพลง
+  // ✊ 1.4 กำมือข้างเดียว (Fist) -> ข้ามเพลง
   if (isIndexDown && isMiddleDown && isRingDown && isPinkyDown) {
     return "FIST";
   }
@@ -145,10 +158,16 @@ function detectSingleHandGesture(landmarks) {
   return "UNKNOWN";
 }
 
-// 2. ตรวจจับสัญลักษณ์ Slot Machine (รูปสามเหลี่ยม 🔺 2 มือ)
-function detectTriangleGesture(hand1, hand2) {
+// 2. ตรวจจับสัญลักษณ์ 2 มือ (Slot Machine 🔺 และ กำมือ 2 ข้าง ✊✊)
+function detectTwoHandGesture(hand1, hand2) {
   if (!hand1 || hand1.length < 21 || !hand2 || hand2.length < 21) return "UNKNOWN";
 
+  // ✊✊ กำมือทั้งสองข้างพร้อมกัน -> รีเซ็ตระบบเป็นศูนย์
+  if (isFist(hand1) && isFist(hand2)) {
+    return "RESET_PALM";
+  }
+
+  // 🔺 สามเหลี่ยม Slot Machine
   const h1IndexTip = hand1[8];
   const h1ThumbTip = hand1[4];
   const h1IndexPip = hand1[6];
@@ -187,13 +206,15 @@ function onResults(results) {
       }
     }
 
+    // ตรวจจับกรณีชู 2 มือพร้อมกันก่อน
     if (results.multiHandLandmarks.length === 2) {
-      detectedGesture = detectTriangleGesture(
+      detectedGesture = detectTwoHandGesture(
         results.multiHandLandmarks[0],
         results.multiHandLandmarks[1]
       );
     }
 
+    // ถ้าไม่ใช่ท่า 2 มือ ค่อยเช็กท่ามือเดียว
     if (detectedGesture === "UNKNOWN") {
       detectedGesture = detectSingleHandGesture(results.multiHandLandmarks[0]);
     }
@@ -216,7 +237,7 @@ function handleGestureWithDelay(gesture) {
   if (counters[gesture] >= HOLD_TARGET) {
     counters[gesture] = 0;
 
-    // --- 🖐️ 4.0 แบมือเพื่อรีเซ็ตระบบกลับเป็นศูนย์ ---
+    // --- ✊✊ 4.0 กำมือ 2 ข้างพร้อมกันเพื่อรีเซ็ตระบบกลับเป็นศูนย์ ---
     if (gesture === "RESET_PALM") {
       currentAudio.pause();
       currentAudio.currentTime = 0;
@@ -265,7 +286,7 @@ function handleGestureWithDelay(gesture) {
       return;
     }
 
-    // --- ✊ 4.3 กำมือเปลี่ยนเพลง ---
+    // --- ✊ 4.3 กำมือข้างเดียวเพื่อเปลี่ยนเพลง ---
     if (gesture === "FIST") {
       if (!isCooldown && currentBand && bandPlaylist[currentBand]) {
         isCooldown = true;
